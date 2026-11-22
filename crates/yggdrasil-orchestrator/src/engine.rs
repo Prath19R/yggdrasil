@@ -13,6 +13,7 @@ use yggdrasil_terminal::TerminalRunner;
 pub struct StageResult {
     pub text: String,
     pub thinking: Option<String>,
+    pub proposed_diffs: Vec<FileDiff>,
 }
 
 pub struct OrchestratorEngine {
@@ -73,7 +74,7 @@ impl OrchestratorEngine {
             (p.root_path.clone(), p.project_type.display_badge().to_string())
         };
 
-        // If stage is Debugger and root_path exists, run cargo check first to feed into AI!
+        // If stage is Debugger and root_path exists, run cargo check first to feed into AI
         let mut compiler_diag = String::new();
         if role == AgentRole::Debugger {
             if let Some(dir) = &root_path {
@@ -114,12 +115,13 @@ impl OrchestratorEngine {
             return Ok(StageResult {
                 text: msg,
                 thinking: None,
+                proposed_diffs: Vec::new(),
             });
         }
 
         let user_msg = format!(
             "Project Context:\n{}\n\nGoal: {}\nStage: {}\nTask: {}\n\
-             Please execute this task thoroughly. If writing or proposing code changes, output exact file paths and code blocks.",
+             Please execute this task thoroughly. If writing or proposing code changes, output exact file paths (e.g. `// File: src/example.rs`) and complete code blocks.",
             context_str, plan.goal, stage.title, stage.description
         );
 
@@ -156,13 +158,19 @@ impl OrchestratorEngine {
                 } else {
                     format!("⚡ [{}]\n{}\n\n{}", role.name(), compiler_diag, resp.text)
                 };
+
+                let mut diffs = Vec::new();
+                if let Some(root) = &root_path {
+                    diffs = Self::extract_code_diffs(root, &resp.text, role.name());
+                }
+
                 Ok(StageResult {
                     text: full_text,
                     thinking: resp.thinking,
+                    proposed_diffs: diffs,
                 })
             }
             Err(e) => {
-                // If AI call failed, provide helpful debug message and any compiler diag gathered
                 let err_text = format!(
                     "⚡ [{}] Execution Note:\nAI Endpoint: {}\n{}",
                     role.name(),
@@ -172,28 +180,90 @@ impl OrchestratorEngine {
                 Ok(StageResult {
                     text: err_text,
                     thinking: None,
+                    proposed_diffs: Vec::new(),
                 })
             }
         }
     }
 
-    pub async fn propose_diff(
-        &self,
-        rel_path: PathBuf,
-        new_content: String,
-        agent: AgentRole,
-        summary: String,
-    ) -> Result<String, String> {
-        let (root, original) = {
-            let p = self.project.lock().await;
-            let orig = p.read_file(&rel_path).unwrap_or_default();
-            (p.root_path.clone().unwrap_or_else(|| PathBuf::from(".")), orig)
+    fn extract_code_diffs(root: &std::path::Path, ai_text: &str, agent_name: &str) -> Vec<FileDiff> {
+        let mut diffs = Vec::new();
+        let lines: Vec<&str> = ai_text.lines().collect();
+        let mut i = 0;
+
+        while i < lines.len() {
+            let line = lines[i].trim();
+            if line.starts_with("```") {
+                // Look for filepath indicator in previous 2 lines or on the first code line
+                let mut detected_path: Option<PathBuf> = None;
+
+                for offset in 1..=2 {
+                    if i >= offset {
+                        let prev = lines[i - offset].trim();
+                        if let Some(p) = Self::parse_filepath(prev) {
+                            detected_path = Some(p);
+                            break;
+                        }
+                    }
+                }
+
+                // Collect code block lines
+                i += 1;
+                let mut code_lines = Vec::new();
+                while i < lines.len() && !lines[i].trim().starts_with("```") {
+                    let code_line = lines[i];
+                    if detected_path.is_none() {
+                        if let Some(p) = Self::parse_filepath(code_line.trim()) {
+                            detected_path = Some(p);
+                        }
+                    }
+                    code_lines.push(code_line);
+                    i += 1;
+                }
+
+                if let Some(rel) = detected_path {
+                    let full = root.join(&rel);
+                    let orig = std::fs::read_to_string(&full).unwrap_or_default();
+                    let proposed = code_lines.join("\n");
+                    if !proposed.trim().is_empty() && proposed != orig {
+                        diffs.push(FileDiff::new(
+                            full,
+                            orig,
+                            proposed,
+                            agent_name,
+                            format!("Automated code proposal from {}", agent_name),
+                        ));
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        diffs
+    }
+
+    fn parse_filepath(line: &str) -> Option<PathBuf> {
+        let lower = line.to_lowercase();
+        let stripped = if let Some(idx) = lower.find("file:") {
+            &line[idx + 5..]
+        } else if let Some(idx) = lower.find("filepath:") {
+            &line[idx + 9..]
+        } else if lower.starts_with("//") || lower.starts_with("#") {
+            let trimmed = line.trim_start_matches(|c| c == '/' || c == '#' || c == ' ');
+            if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains('.') {
+                trimmed
+            } else {
+                return None;
+            }
+        } else {
+            return None;
         };
 
-        let full_path = root.join(&rel_path);
-        let diff = FileDiff::new(full_path, original, new_content, agent.name(), summary);
-        let id = diff.id.clone();
-        self.pending_diffs.lock().await.push(diff);
-        Ok(id)
+        let clean = stripped.trim().trim_matches(|c| c == '`' || c == '"' || c == '\'' || c == '*' || c == ':').trim();
+        if clean.contains('.') && !clean.contains(' ') {
+            Some(PathBuf::from(clean))
+        } else {
+            None
+        }
     }
 }

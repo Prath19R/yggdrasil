@@ -601,6 +601,9 @@ impl eframe::App for YggdrasilApp {
                                             text: result.text,
                                             thinking: result.thinking,
                                         });
+                                        for diff in result.proposed_diffs {
+                                            let _ = tx.send(UiEvent::DiffProposed(diff));
+                                        }
                                     }
                                     Err(e) => {
                                         let _ = tx.send(UiEvent::StageUpdate {

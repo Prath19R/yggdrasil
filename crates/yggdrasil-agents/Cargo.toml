@@ -9,3 +9,4 @@ serde_json.workspace = true
 tokio.workspace = true
 yggdrasil-core.workspace = true
 yggdrasil-project.workspace = true
+yggdrasil-terminal.workspace = true

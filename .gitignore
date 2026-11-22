@@ -3,4 +3,12 @@ Cargo.lock
 **/*.rs.bk
 *.pdb
 .env
+.env*
+*.env
+config.json
+*key*.json
+credentials.json
+secrets/
+*.pem
+*.key
 plan.md
