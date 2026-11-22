@@ -1,7 +1,6 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -65,7 +64,7 @@ fn detect_file_kind(path: &Path) -> &'static str {
     }
 }
 
-fn scan_directory_recursive(dir_path: &Path, depth: usize) -> FileItemDto {
+fn scan_directory_fast(dir_path: &Path, depth: usize) -> FileItemDto {
     let name = dir_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -73,56 +72,52 @@ fn scan_directory_recursive(dir_path: &Path, depth: usize) -> FileItemDto {
 
     let mut children = Vec::new();
 
-    if depth < 16 {
-        let walker = WalkBuilder::new(dir_path)
-            .max_depth(Some(1))
-            .git_ignore(true)
-            .hidden(true)
-            .build();
+    // Limit depth to 8 levels for maximum responsiveness and to prevent deep traversal stalls
+    if depth < 8 {
+        if let Ok(entries) = std::fs::read_dir(dir_path) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let entry_name = file_name.to_string_lossy();
 
-        for entry in walker.flatten() {
-            let path = entry.into_path();
-            if path == dir_path {
-                continue;
-            }
-
-            let is_dir = path.is_dir();
-            let entry_name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            // Skip heavy build / cache folders
-            if is_dir {
-                match entry_name.as_str() {
-                    "target" | "node_modules" | ".git" | ".next" | "dist" | "build"
-                    | ".cache" | "__pycache__" | ".venv" | "venv" | "obj" | "bin" => continue,
+                // Skip hidden files/directories and common heavy build/cache folders
+                if entry_name.starts_with('.') {
+                    continue;
+                }
+                match entry_name.as_ref() {
+                    "target" | "node_modules" | "dist" | "build" | ".cache"
+                    | "__pycache__" | "venv" | ".venv" | "obj" | "bin"
+                    | ".idea" | ".vscode" | "coverage" | "tmp" => continue,
                     _ => {}
                 }
-            }
 
-            if is_dir {
-                children.push(scan_directory_recursive(&path, depth + 1));
-            } else {
-                let kind = detect_file_kind(&path);
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                let content = if kind == "Text" && size < 500_000 {
-                    std::fs::read_to_string(&path).unwrap_or_default()
-                } else {
-                    String::new()
+                let file_type = match entry.file_type() {
+                    Ok(ft) => ft,
+                    Err(_) => continue,
                 };
 
-                children.push(FileItemDto {
-                    id: path.to_string_lossy().to_string(),
-                    name: entry_name,
-                    path: path.to_string_lossy().to_string(),
-                    is_dir: false,
-                    kind: kind.to_string(),
-                    content,
-                    size_bytes: size,
-                    is_expanded: false,
-                    children: Vec::new(),
-                });
+                let path = entry.path();
+                let path_str = path.to_string_lossy().to_string();
+
+                if file_type.is_dir() {
+                    children.push(scan_directory_fast(&path, depth + 1));
+                } else if file_type.is_file() {
+                    let kind = detect_file_kind(&path);
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+
+                    // ULTRA-FAST: Do not read file content during folder scan!
+                    // Content is lazy-loaded on demand when clicked or opened.
+                    children.push(FileItemDto {
+                        id: path_str.clone(),
+                        name: entry_name.to_string(),
+                        path: path_str,
+                        is_dir: false,
+                        kind: kind.to_string(),
+                        content: String::new(),
+                        size_bytes: size,
+                        is_expanded: false,
+                        children: Vec::new(),
+                    });
+                }
             }
         }
     }
@@ -157,12 +152,16 @@ fn scan_directory_recursive(dir_path: &Path, depth: usize) -> FileItemDto {
 
 #[tauri::command]
 async fn open_folder_dialog() -> Result<Option<FileItemDto>, String> {
-    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-        let tree = scan_directory_recursive(&folder, 0);
-        Ok(Some(tree))
-    } else {
-        Ok(None)
-    }
+    tokio::task::spawn_blocking(|| {
+        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+            let tree = scan_directory_fast(&folder, 0);
+            Ok(Some(tree))
+        } else {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

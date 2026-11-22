@@ -191,9 +191,79 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
         let current_tabs = open_tabs.get();
         if let Some(existing_idx) = current_tabs.iter().position(|t| t.path == selected.path) {
             set_active_tab_idx.set(existing_idx);
+            if current_tabs[existing_idx].content.is_empty() && current_tabs[existing_idx].kind == FileKind::Text && TauriService::is_available() {
+                let target_path = current_tabs[existing_idx].path.clone();
+                let tab_idx = existing_idx;
+                spawn_local(async move {
+                    if let Ok(res) = TauriService::invoke::<serde_json::Value>(
+                        "read_file_content",
+                        &serde_json::json!({ "path": target_path.clone() }),
+                    )
+                    .await
+                    {
+                        if let Some(content_str) = res["content"].as_str() {
+                            let loaded = content_str.to_string();
+                            set_open_tabs.update(|tabs| {
+                                if let Some(tab) = tabs.get_mut(tab_idx) {
+                                    tab.content = loaded.clone();
+                                }
+                            });
+                            set_root_item.update(|root| {
+                                fn update_file(item: &mut FileItem, target: &str, content: &str) {
+                                    if item.path == target {
+                                        item.content = content.to_string();
+                                        return;
+                                    }
+                                    for child in &mut item.children {
+                                        update_file(child, target, content);
+                                    }
+                                }
+                                update_file(root, &target_path, &loaded);
+                            });
+                        }
+                    }
+                });
+            }
         } else {
             let new_idx = current_tabs.len();
-            set_open_tabs.update(|tabs| tabs.push(selected));
+            let item_to_open = selected.clone();
+            let target_path = item_to_open.path.clone();
+
+            if item_to_open.content.is_empty() && item_to_open.kind == FileKind::Text && TauriService::is_available() {
+                let p = target_path.clone();
+                let tab_idx = new_idx;
+                spawn_local(async move {
+                    if let Ok(res) = TauriService::invoke::<serde_json::Value>(
+                        "read_file_content",
+                        &serde_json::json!({ "path": p.clone() }),
+                    )
+                    .await
+                    {
+                        if let Some(content_str) = res["content"].as_str() {
+                            let loaded = content_str.to_string();
+                            set_open_tabs.update(|tabs| {
+                                if let Some(tab) = tabs.get_mut(tab_idx) {
+                                    tab.content = loaded.clone();
+                                }
+                            });
+                            set_root_item.update(|root| {
+                                fn update_file(item: &mut FileItem, target: &str, content: &str) {
+                                    if item.path == target {
+                                        item.content = content.to_string();
+                                        return;
+                                    }
+                                    for child in &mut item.children {
+                                        update_file(child, target, content);
+                                    }
+                                }
+                                update_file(root, &p, &loaded);
+                            });
+                        }
+                    }
+                });
+            }
+
+            set_open_tabs.update(|tabs| tabs.push(item_to_open));
             set_active_tab_idx.set(new_idx);
         }
     });
@@ -610,8 +680,42 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
                             None
                         }
                         if let Some(first_file) = find_first_file(&folder_item) {
-                            set_open_tabs.set(vec![first_file]);
+                            let initial_file = first_file.clone();
+                            let first_path = initial_file.path.clone();
+                            set_open_tabs.set(vec![initial_file]);
                             set_active_tab_idx.set(0);
+
+                            if TauriService::is_available() {
+                                spawn_local(async move {
+                                    if let Ok(res) = TauriService::invoke::<serde_json::Value>(
+                                        "read_file_content",
+                                        &serde_json::json!({ "path": first_path.clone() }),
+                                    )
+                                    .await
+                                    {
+                                        if let Some(content_str) = res["content"].as_str() {
+                                            let loaded = content_str.to_string();
+                                            set_open_tabs.update(|tabs| {
+                                                if let Some(tab) = tabs.get_mut(0) {
+                                                    tab.content = loaded.clone();
+                                                }
+                                            });
+                                            set_root_item.update(|root| {
+                                                fn update_file(item: &mut FileItem, target: &str, content: &str) {
+                                                    if item.path == target {
+                                                        item.content = content.to_string();
+                                                        return;
+                                                    }
+                                                    for child in &mut item.children {
+                                                        update_file(child, target, content);
+                                                    }
+                                                }
+                                                update_file(root, &first_path, &loaded);
+                                            });
+                                        }
+                                    }
+                                });
+                            }
                         }
 
                         set_terminal_logs.update(|logs| {
