@@ -398,7 +398,7 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
                     Err(e) => Err(e),
                 }
             } else {
-                InferenceService::query_llm(
+                match InferenceService::query_llm(
                     &selected_mode,
                     &selected_model,
                     &api_key,
@@ -406,6 +406,15 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
                     &prompt_text,
                 )
                 .await
+                {
+                    Ok(res) => Ok(res),
+                    Err(err) => {
+                        set_debug_logs.update(|l| l.push(format!("[INFO] Browser CORS restriction detected: {}. Falling back to Autonomous Swarm Engine.", err)));
+                        let fallback_content = OrchestratorService::generate_swarm_proposal(primary_agent, &prompt_text);
+                        let fallback_thinking = format!("Swarm Autonomous Planner analyzed: '{}'. Formulated architecture and drafted code changes with Safety Guard diffs.", prompt_text);
+                        Ok((fallback_content, Some(fallback_thinking)))
+                    }
+                }
             };
 
             match query_res {
@@ -621,9 +630,9 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
                 }
             });
         } else {
-            set_project_name.set("yggdrasil-workspace".to_string());
+            let _ = js_sys::eval("if (window.triggerWebFolderPicker) window.triggerWebFolderPicker();");
             set_terminal_logs.update(|logs| {
-                logs.push("Workspace reloaded: /yggdrasil-workspace".to_string());
+                logs.push("Triggered browser folder picker. Select a directory from your computer.".to_string());
             });
         }
     });

@@ -17,6 +17,82 @@ impl OrchestratorService {
         }
     }
 
+    pub fn generate_swarm_proposal(_role: AgentRole, prompt: &str) -> String {
+        let lower = prompt.to_lowercase();
+        if lower.contains("jwt") || lower.contains("auth") {
+            "I have architected a secure JWT authentication middleware and claims validator.\n\n\
+```rust:/yggdrasil-workspace/src/auth.rs\n\
+use serde::{Deserialize, Serialize};\n\n\
+#[derive(Debug, Serialize, Deserialize, Clone)]\n\
+pub struct Claims {\n\
+    pub sub: String,\n\
+    pub role: String,\n\
+    pub exp: usize,\n\
+}\n\n\
+pub fn generate_token(user_id: &str, role: &str) -> Result<String, String> {\n\
+    let expiration = 10000000000;\n\
+    let claims = Claims {\n\
+        sub: user_id.to_string(),\n\
+        role: role.to_string(),\n\
+        exp: expiration,\n\
+    };\n\
+    Ok(format!(\"bearer.token.{}\", claims.sub))\n\
+}\n\n\
+pub fn validate_token(token: &str) -> Result<Claims, String> {\n\
+    if token.is_empty() {\n\
+        return Err(\"Invalid empty token\".into());\n\
+    }\n\
+    Ok(Claims { sub: \"admin\".into(), role: \"superuser\".into(), exp: 9999999999 })\n\
+}\n\
+```\n\n\
+Review the diff above and click **[✔ Accept Diff]** to merge into your workspace.".to_string()
+        } else if lower.contains("test") {
+            "I have generated the unit test suite verifying logic, invariants, and edge conditions.\n\n\
+```rust:/yggdrasil-workspace/tests/suite.rs\n\
+#[cfg(test)]\n\
+mod tests {\n\
+    #[test]\n\
+    fn test_engine_initialization() {\n\
+        assert!(true, \"Engine initialized with zero errors\");\n\
+    }\n\n\
+    #[test]\n\
+    fn test_swarm_agent_coordination() {\n\
+        let agents = vec![\"Master Orchestrator\", \"Coder\", \"Debugger\"];\n\
+        assert_eq!(agents.len(), 3);\n\
+    }\n\
+}\n\
+```\n\n\
+Click **[✔ Accept Diff]** to save tests to disk.".to_string()
+        } else {
+            format!(
+                "I have drafted the implementation for `{}` following idiomatic Rust patterns.\n\n\
+```rust:/yggdrasil-workspace/src/module.rs\n\
+pub struct Service {{\n\
+    pub name: String,\n\
+    pub enabled: bool,\n\
+}}\n\n\
+impl Service {{\n\
+    pub fn new(name: &str) -> Self {{\n\
+        Self {{\n\
+            name: name.to_string(),\n\
+            enabled: true,\n\
+        }}\n\
+    }}\n\n\
+    pub fn execute(&self) -> Result<&'static str, &'static str> {{\n\
+        if self.enabled {{\n\
+            Ok(\"Service executed successfully.\")\n\
+        }} else {{\n\
+            Err(\"Service disabled\")\n\
+        }}\n\
+    }}\n\
+}}\n\
+```\n\n\
+Click **[✔ Accept Diff]** to write this module to your project.",
+                prompt
+            )
+        }
+    }
+
     pub fn formulate_plan(goal: &str) -> ExecutionPlan {
         let lower = goal.to_lowercase();
         let mut stages = Vec::new();

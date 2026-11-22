@@ -63,6 +63,26 @@
       window.isTauriApp = function() {
         return !!(window.__TAURI__ && window.__TAURI__.core);
       };
+      window.triggerWebFolderPicker = function() {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.setAttribute("webkitdirectory", "");
+        input.setAttribute("directory", "");
+        input.setAttribute("multiple", "");
+        input.style.display = "none";
+        document.body.appendChild(input);
+
+        input.onchange = function(e) {
+          const files = e.target.files;
+          if (!files || files.length === 0) return;
+          const firstPath = files[0].webkitRelativePath || files[0].name;
+          const folderName = firstPath.split("/")[0] || "custom-workspace";
+          console.log("Loaded " + files.length + " files from " + folderName);
+          document.body.removeChild(input);
+        };
+
+        input.click();
+      };
     </script>
   </head>
   <body class="bg-[#09090b] text-zinc-100 h-full overflow-hidden font-sans">
