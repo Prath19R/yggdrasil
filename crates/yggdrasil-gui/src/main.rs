@@ -15,8 +15,13 @@ fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Yggdrasil — Pure Rust AI IDE")
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([800.0, 500.0]),
+            .with_inner_size([1360.0, 860.0])
+            .with_min_inner_size([800.0, 500.0])
+            .with_resizable(true)
+            .with_maximize_button(true)
+            .with_minimize_button(true)
+            .with_close_button(true)
+            .with_active(true),
         ..Default::default()
     };
 

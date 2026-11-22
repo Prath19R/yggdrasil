@@ -1,5 +1,5 @@
 use crate::plan::{ExecutionPlan, StageStatus};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use yggdrasil_agents::{get_system_prompt, AgentRole};
@@ -197,7 +197,7 @@ impl OrchestratorEngine {
         }
     }
 
-    fn extract_code_diffs(root: &std::path::Path, ai_text: &str, agent_name: &str) -> Vec<FileDiff> {
+    fn extract_code_diffs(root: &Path, ai_text: &str, agent_name: &str) -> Vec<FileDiff> {
         let mut diffs = Vec::new();
         let lines: Vec<&str> = ai_text.lines().collect();
         let mut i = 0;
@@ -205,15 +205,26 @@ impl OrchestratorEngine {
         while i < lines.len() {
             let line = lines[i].trim();
             if line.starts_with("```") {
-                // Look for filepath indicator in previous 2 lines or on the first code line
+                // Check if language tag includes filepath, e.g. ```rust:src/lib.rs
                 let mut detected_path: Option<PathBuf> = None;
+                if let Some(after_ticks) = line.strip_prefix("```") {
+                    if let Some(colon_idx) = after_ticks.find(':') {
+                        let path_part = &after_ticks[colon_idx + 1..].trim();
+                        if !path_part.is_empty() {
+                            detected_path = Some(PathBuf::from(path_part));
+                        }
+                    }
+                }
 
-                for offset in 1..=2 {
-                    if i >= offset {
-                        let prev = lines[i - offset].trim();
-                        if let Some(p) = Self::parse_filepath(prev) {
-                            detected_path = Some(p);
-                            break;
+                // Check previous 3 lines for file indicators
+                if detected_path.is_none() {
+                    for offset in 1..=3 {
+                        if i >= offset {
+                            let prev = lines[i - offset].trim();
+                            if let Some(p) = Self::parse_filepath(prev) {
+                                detected_path = Some(p);
+                                break;
+                            }
                         }
                     }
                 }
@@ -233,7 +244,7 @@ impl OrchestratorEngine {
                 }
 
                 if let Some(rel) = detected_path {
-                    let full = root.join(&rel);
+                    let full = if rel.is_absolute() { rel.clone() } else { root.join(&rel) };
                     let orig = std::fs::read_to_string(&full).unwrap_or_default();
                     let proposed = code_lines.join("\n");
                     if !proposed.trim().is_empty() && proposed != orig {
@@ -242,7 +253,7 @@ impl OrchestratorEngine {
                             orig,
                             proposed,
                             agent_name,
-                            format!("Automated code proposal from {}", agent_name),
+                            format!("Automated code proposal for `{}`", rel.display()),
                         ));
                     }
                 }
@@ -259,9 +270,13 @@ impl OrchestratorEngine {
             &line[idx + 5..]
         } else if let Some(idx) = lower.find("filepath:") {
             &line[idx + 9..]
+        } else if let Some(idx) = lower.find("path:") {
+            &line[idx + 5..]
         } else if lower.starts_with("//") || lower.starts_with("#") {
             let trimmed = line.trim_start_matches(|c| c == '/' || c == '#' || c == ' ');
-            if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains('.') {
+            if (trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains('.'))
+                && !trimmed.contains("http")
+            {
                 trimmed
             } else {
                 return None;
@@ -270,8 +285,12 @@ impl OrchestratorEngine {
             return None;
         };
 
-        let clean = stripped.trim().trim_matches(|c| c == '`' || c == '"' || c == '\'' || c == '*' || c == ':').trim();
-        if clean.contains('.') && !clean.contains(' ') {
+        let clean = stripped
+            .trim()
+            .trim_matches(|c| c == '`' || c == '"' || c == '\'' || c == '*' || c == ':' || c == '(' || c == ')')
+            .trim();
+
+        if clean.contains('.') && !clean.contains(' ') && clean.len() >= 3 {
             Some(PathBuf::from(clean))
         } else {
             None

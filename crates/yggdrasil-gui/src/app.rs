@@ -46,6 +46,7 @@ pub enum UiEvent {
     StageUpdate { text: String, thinking: Option<String> },
     DiffProposed(FileDiff),
     TerminalLog(String),
+    DebugLog(String),
     ChatReply { sender: String, text: String, thinking: Option<String> },
 }
 
@@ -108,6 +109,7 @@ pub struct YggdrasilApp {
     pub terminal_input: String,
     pub terminal_logs: Vec<String>,
     pub compiler_logs: Vec<String>,
+    pub debug_logs: Vec<String>,
     pub active_bottom_tab: usize,
     pub terminal_height: f32,
 
@@ -119,6 +121,7 @@ pub struct YggdrasilApp {
     pub current_model: String,
     pub show_thinking: bool,
     pub auto_apply_diffs: bool,
+    pub is_fullscreen: bool,
 
     // API Key Dialog
     pub show_api_key_modal: bool,
@@ -145,16 +148,21 @@ impl YggdrasilApp {
             chat_input: String::new(),
             active_agent: AgentRole::Orchestrator,
             terminal_input: String::new(),
-            terminal_logs: vec!["⚡ Yggdrasil native PTY initialized. Ready.".to_string()],
+            terminal_logs: vec!["⚡ Yggdrasil PTY initialized. Ready.".to_string()],
             compiler_logs: Vec::new(),
+            debug_logs: vec![
+                format!("[{}] [INIT] Yggdrasil IDE core initialized in Debug Mode", Utc::now().format("%H:%M:%S")),
+                format!("[{}] [INIT] Tokio multi-threaded async actor bus online", Utc::now().format("%H:%M:%S")),
+            ],
             active_bottom_tab: 0,
-            terminal_height: 200.0,
+            terminal_height: 220.0,
             ui_receiver,
             ui_sender,
             current_mode: InferenceMode::CloudApi,
             current_model: "nvidia/nemotron-3.5-lightning-30b-a3b".to_string(),
             show_thinking: true,
-            auto_apply_diffs: true,
+            auto_apply_diffs: false, // Default to false so user clearly sees the Diff Review card!
+            is_fullscreen: false,
             show_api_key_modal: false,
             api_key_input: key_input,
         };
@@ -211,6 +219,14 @@ impl YggdrasilApp {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "file".to_string());
 
+        self.debug_logs.push(format!(
+            "[{}] [FILE_IO] Opened: {} ({:?}, {} bytes)",
+            Utc::now().format("%H:%M:%S"),
+            path.display(),
+            kind,
+            file_size_bytes
+        ));
+
         self.open_tabs.push(EditorTab {
             path,
             name,
@@ -237,50 +253,70 @@ impl YggdrasilApp {
             if tab.kind == FileKind::Text {
                 if let Ok(_) = std::fs::write(&tab.path, &tab.content) {
                     tab.is_dirty = false;
+                    self.debug_logs.push(format!(
+                        "[{}] [FILE_IO] Saved: {} ({} bytes)",
+                        Utc::now().format("%H:%M:%S"),
+                        tab.path.display(),
+                        tab.content.len()
+                    ));
                 }
             }
         }
     }
 
     fn render_file_tree(ui: &mut egui::Ui, node: &FileNode, to_open: &mut Option<PathBuf>) {
-        if node.is_dir {
-            egui::CollapsingHeader::new(format!("📁 {}", node.name))
-                .default_open(node.name == "src" || node.children.len() < 4)
-                .show(ui, |ui| {
-                    for child in &node.children {
-                        Self::render_file_tree(ui, child, to_open);
-                    }
-                });
-        } else {
-            let ext = node
-                .path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
+        ui.push_id(&node.path, |ui| {
+            if node.is_dir {
+                egui::CollapsingHeader::new(format!("📁 {}", node.name))
+                    .id_salt(&node.path)
+                    .default_open(node.name == "src" || node.name == "crates" || node.children.len() < 4)
+                    .show(ui, |ui| {
+                        for child in &node.children {
+                            Self::render_file_tree(ui, child, to_open);
+                        }
+                    });
+            } else {
+                let ext = node
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
 
-            let icon = match ext.as_str() {
-                "rs" => "🦀",
-                "js" | "ts" | "jsx" | "tsx" => "📦",
-                "py" => "🐍",
-                "json" | "toml" | "yaml" | "yml" => "⚙️",
-                "md" => "📝",
-                "png" | "jpg" | "jpeg" | "gif" | "webp" => "🖼️",
-                "mp4" | "webm" | "mov" => "🎬",
-                "pdf" => "📑",
-                _ => "📄",
-            };
+                let icon = match ext.as_str() {
+                    "rs" => "🦀",
+                    "js" | "ts" | "jsx" | "tsx" => "📦",
+                    "py" => "🐍",
+                    "json" | "toml" | "yaml" | "yml" => "⚙️",
+                    "md" => "📝",
+                    "png" | "jpg" | "jpeg" | "gif" | "webp" => "🖼️",
+                    "mp4" | "webm" | "mov" => "🎬",
+                    "pdf" => "📑",
+                    _ => "📄",
+                };
 
-            let label = format!("{} {}", icon, node.name);
-            if ui.button(label).clicked() {
-                *to_open = Some(node.path.clone());
+                let label = format!("{} {}", icon, node.name);
+                if ui.button(label).clicked() {
+                    *to_open = Some(node.path.clone());
+                }
             }
-        }
+        });
     }
 }
 
 impl eframe::App for YggdrasilApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Toggle Fullscreen with F11
+        if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+            self.is_fullscreen = !self.is_fullscreen;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+            self.debug_logs.push(format!(
+                "[{}] [UI] Fullscreen toggled: {}",
+                Utc::now().format("%H:%M:%S"),
+                self.is_fullscreen
+            ));
+        }
+
         // Poll incoming async UI events
         while let Ok(event) = self.ui_receiver.try_recv() {
             match event {
@@ -299,12 +335,24 @@ impl eframe::App for YggdrasilApp {
                     if self.auto_apply_diffs {
                         let _ = diff.accept();
                         self.open_file(path.clone());
+                        self.debug_logs.push(format!(
+                            "[{}] [DIFF] Auto-applied code to: {}",
+                            Utc::now().format("%H:%M:%S"),
+                            path.display()
+                        ));
+                    } else {
+                        self.debug_logs.push(format!(
+                            "[{}] [DIFF] Proposed diff generated for: {} (Pending Review)",
+                            Utc::now().format("%H:%M:%S"),
+                            path.display()
+                        ));
                     }
+
                     self.chat_history.push(ChatMessage {
                         sender: diff.agent_role.clone(),
                         is_user: false,
                         text: if self.auto_apply_diffs {
-                            format!("⚡ Applied code changes to `{}`\n{}", path.display(), diff.summary)
+                            format!("⚡ Automatically applied code changes to `{}`\n{}", path.display(), diff.summary)
                         } else {
                             format!("Proposed changes for `{}`:\n{}", path.display(), diff.summary)
                         },
@@ -315,6 +363,9 @@ impl eframe::App for YggdrasilApp {
                 }
                 UiEvent::TerminalLog(line) => {
                     self.terminal_logs.push(line);
+                }
+                UiEvent::DebugLog(log) => {
+                    self.debug_logs.push(log);
                 }
                 UiEvent::ChatReply { sender, text, thinking } => {
                     self.chat_history.push(ChatMessage {
@@ -337,9 +388,16 @@ impl eframe::App for YggdrasilApp {
 
                 if ui.button("📂 Open Folder...").clicked() {
                     let project_clone = self.project.clone();
+                    let tx = self.ui_sender.clone();
                     tokio::spawn(async move {
                         let mut p = project_clone.lock().await;
-                        let _ = p.open_via_dialog();
+                        if let Ok(Some(path)) = p.open_via_dialog() {
+                            let _ = tx.send(UiEvent::DebugLog(format!(
+                                "[{}] [PROJECT] Loaded workspace: {}",
+                                Utc::now().format("%H:%M:%S"),
+                                path.display()
+                            )));
+                        }
                     });
                 }
 
@@ -359,8 +417,16 @@ impl eframe::App for YggdrasilApp {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.weak(format!("Model: [{}]", self.current_model));
+                    // Fullscreen Toggle
+                    let fs_label = if self.is_fullscreen { "🗗 Windowed" } else { "⛶ Fullscreen" };
+                    if ui.button(fs_label).clicked() {
+                        self.is_fullscreen = !self.is_fullscreen;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+                    }
+
+                    ui.separator();
                     ui.weak("RAM: ~42 MB | Latency: 18ms");
+                    ui.weak(format!("Model: [{}]", self.current_model));
                     ui.separator();
 
                     // Mode Switcher Dropdown
@@ -373,14 +439,24 @@ impl eframe::App for YggdrasilApp {
                         .show_ui(ui, |ui| {
                             if ui.selectable_value(&mut self.current_mode, InferenceMode::CloudApi, "☁️ Cloud API (NVIDIA NIM)").clicked() {
                                 let router = self.router.clone();
+                                let tx = self.ui_sender.clone();
                                 tokio::spawn(async move {
                                     router.lock().await.set_mode(InferenceMode::CloudApi);
+                                    let _ = tx.send(UiEvent::DebugLog(format!(
+                                        "[{}] [ROUTER] Switched mode to Cloud API (NVIDIA NIM)",
+                                        Utc::now().format("%H:%M:%S")
+                                    )));
                                 });
                             }
                             if ui.selectable_value(&mut self.current_mode, InferenceMode::Local, "💻 Local Mode (Ollama)").clicked() {
                                 let router = self.router.clone();
+                                let tx = self.ui_sender.clone();
                                 tokio::spawn(async move {
                                     router.lock().await.set_mode(InferenceMode::Local);
+                                    let _ = tx.send(UiEvent::DebugLog(format!(
+                                        "[{}] [ROUTER] Switched mode to Local (Ollama localhost:11434)",
+                                        Utc::now().format("%H:%M:%S")
+                                    )));
                                 });
                             }
                         });
@@ -403,6 +479,7 @@ impl eframe::App for YggdrasilApp {
         // NVIDIA API Key Configuration Modal Window
         if self.show_api_key_modal {
             egui::Window::new("🔑 Configure NVIDIA NIM API Key")
+                .id(egui::Id::new("nvidia_api_key_modal"))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -425,8 +502,13 @@ impl eframe::App for YggdrasilApp {
                             let key = self.api_key_input.trim().to_string();
                             save_api_key_to_config(&key);
                             let router = self.router.clone();
+                            let tx = self.ui_sender.clone();
                             tokio::spawn(async move {
                                 router.lock().await.set_api_key(key);
+                                let _ = tx.send(UiEvent::DebugLog(format!(
+                                    "[{}] [AUTH] NVIDIA API key applied and stored in config.json",
+                                    Utc::now().format("%H:%M:%S")
+                                )));
                             });
                             self.show_api_key_modal = false;
                         }
@@ -447,10 +529,15 @@ impl eframe::App for YggdrasilApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("🔄 Refresh").clicked() {
                             let project_clone = self.project.clone();
+                            let tx = self.ui_sender.clone();
                             tokio::spawn(async move {
                                 let mut p = project_clone.lock().await;
                                 if let Some(root) = p.root_path.clone() {
                                     let _ = p.open_project(root);
+                                    let _ = tx.send(UiEvent::DebugLog(format!(
+                                        "[{}] [EXPLORER] Refreshed directory tree",
+                                        Utc::now().format("%H:%M:%S")
+                                    )));
                                 }
                             });
                         }
@@ -487,7 +574,7 @@ impl eframe::App for YggdrasilApp {
         // Right Panel: Agent Chat Window
         egui::SidePanel::right("agent_chat_window")
             .resizable(true)
-            .default_width(380.0)
+            .default_width(420.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("💬 Agent Deck");
@@ -507,60 +594,106 @@ impl eframe::App for YggdrasilApp {
                 });
                 ui.separator();
 
-                // Chat Message Scroll View
-                let chat_height = ui.available_height() - 90.0;
+                // Chat Message Scroll View (with zero ID clashes)
+                let chat_height = ui.available_height() - 95.0;
                 let mut file_to_open_after = None;
+
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .max_height(chat_height)
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
-                        for msg in &mut self.chat_history {
-                            ui.group(|ui| {
-                                ui.horizontal(|ui| {
-                                    if msg.is_user {
-                                        ui.colored_label(egui::Color32::from_rgb(140, 200, 255), "👤 You");
+                        for (idx, msg) in self.chat_history.iter_mut().enumerate() {
+                            ui.push_id(egui::Id::new("chat_item").with(idx), |ui| {
+                                egui::Frame::group(ui.style())
+                                    .fill(if msg.is_user {
+                                        egui::Color32::from_rgb(20, 30, 45)
                                     } else {
-                                        ui.colored_label(egui::Color32::from_rgb(255, 200, 100), &msg.sender);
-                                    }
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        ui.weak(&msg.timestamp);
-                                    });
-                                });
-
-                                // Thinking block
-                                if self.show_thinking {
-                                    if let Some(thought) = &msg.thinking {
-                                        egui::CollapsingHeader::new("💭 Thinking trace")
-                                            .default_open(false)
-                                            .show(ui, |ui| {
-                                                ui.monospace(thought);
-                                            });
-                                    }
-                                }
-
-                                ui.label(&msg.text);
-
-                                // Diff Card with Accept / Reject buttons
-                                if let Some(diff) = &mut msg.diff {
-                                    if diff.status == DiffStatus::Pending {
-                                        ui.separator();
-                                        ui.label(format!("File: {}", diff.path.display()));
+                                        egui::Color32::from_rgb(25, 28, 36)
+                                    })
+                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 60, 75)))
+                                    .corner_radius(6.0)
+                                    .inner_margin(8.0)
+                                    .show(ui, |ui| {
                                         ui.horizontal(|ui| {
-                                            if ui.button("✔ Accept Diff").clicked() {
-                                                let _ = diff.accept();
-                                                file_to_open_after = Some(diff.path.clone());
+                                            if msg.is_user {
+                                                ui.colored_label(egui::Color32::from_rgb(140, 200, 255), "👤 You");
+                                            } else {
+                                                ui.colored_label(egui::Color32::from_rgb(255, 200, 100), &msg.sender);
                                             }
-                                            if ui.button("✖ Reject").clicked() {
-                                                diff.reject();
-                                            }
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                ui.weak(&msg.timestamp);
+                                            });
                                         });
-                                    } else {
-                                        ui.weak(format!("Status: {:?}", diff.status));
-                                    }
-                                }
+
+                                        // Thinking block with unique id_salt
+                                        if self.show_thinking {
+                                            if let Some(thought) = &msg.thinking {
+                                                egui::CollapsingHeader::new("💭 Reasoning / Thinking Trace")
+                                                    .id_salt(format!("think_header_{}", idx))
+                                                    .default_open(false)
+                                                    .show(ui, |ui| {
+                                                        ui.monospace(thought);
+                                                    });
+                                            }
+                                        }
+
+                                        ui.add_space(4.0);
+                                        ui.label(&msg.text);
+
+                                        // High-Contrast Interactive Code Diff Card
+                                        if let Some(diff) = &mut msg.diff {
+                                            ui.add_space(8.0);
+                                            egui::Frame::NONE
+                                                .fill(egui::Color32::from_rgb(18, 22, 30))
+                                                .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgb(46, 160, 67)))
+                                                .corner_radius(6.0)
+                                                .inner_margin(10.0)
+                                                .show(ui, |ui| {
+                                                    ui.horizontal(|ui| {
+                                                        ui.colored_label(egui::Color32::from_rgb(100, 230, 120), "📝 PROPOSED CODE DIFF");
+                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                            let status_text = match diff.status {
+                                                                DiffStatus::Pending => "⏳ PENDING REVIEW",
+                                                                DiffStatus::Accepted => "✔ ACCEPTED & APPLIED",
+                                                                DiffStatus::Rejected => "✖ REJECTED",
+                                                            };
+                                                            ui.weak(status_text);
+                                                        });
+                                                    });
+
+                                                    ui.label(format!("Target File: {}", diff.path.display()));
+                                                    ui.weak(&diff.summary);
+                                                    ui.separator();
+
+                                                    // Code preview box
+                                                    egui::ScrollArea::both()
+                                                        .id_salt(format!("diff_scroll_{}", idx))
+                                                        .max_height(140.0)
+                                                        .auto_shrink([false, false])
+                                                        .show(ui, |ui| {
+                                                            ui.monospace(&diff.proposed_content);
+                                                        });
+
+                                                    ui.add_space(6.0);
+                                                    if diff.status == DiffStatus::Pending {
+                                                        ui.horizontal(|ui| {
+                                                            if ui.button("✔ Accept & Apply to Disk").clicked() {
+                                                                let _ = diff.accept();
+                                                                file_to_open_after = Some(diff.path.clone());
+                                                            }
+                                                            if ui.button("✖ Reject").clicked() {
+                                                                diff.reject();
+                                                            }
+                                                        });
+                                                    } else if diff.status == DiffStatus::Accepted {
+                                                        ui.colored_label(egui::Color32::from_rgb(100, 240, 120), "✔ Changes successfully written to file!");
+                                                    }
+                                                });
+                                        }
+                                    });
                             });
-                            ui.add_space(4.0);
+                            ui.add_space(6.0);
                         }
                     });
 
@@ -607,23 +740,58 @@ impl eframe::App for YggdrasilApp {
                                 .collect::<Vec<_>>()
                                 .join("\n");
 
+                            let _ = tx.send(UiEvent::DebugLog(format!(
+                                "[{}] [ORCHESTRATOR] Formulated plan with {} stages for query: '{}'",
+                                Utc::now().format("%H:%M:%S"),
+                                plan.stages.len(),
+                                input
+                            )));
+
                             let _ = tx.send(UiEvent::StageUpdate {
                                 text: format!("Formulated Execution Plan:\n{}", stages_summary),
                                 thinking: None,
                             });
 
                             for i in 0..plan.stages.len() {
+                                let stage_name = plan.stages[i].title.clone();
+                                let agent_name = plan.stages[i].agent.name().to_string();
+                                
+                                let _ = tx.send(UiEvent::DebugLog(format!(
+                                    "[{}] [STAGE_START] Executing stage {}/{}: [{}] {}",
+                                    Utc::now().format("%H:%M:%S"),
+                                    i + 1,
+                                    plan.stages.len(),
+                                    agent_name,
+                                    stage_name
+                                )));
+
                                 match orch.execute_stage(i, &mut plan).await {
                                     Ok(result) => {
+                                        let diff_count = result.proposed_diffs.len();
+                                        let _ = tx.send(UiEvent::DebugLog(format!(
+                                            "[{}] [STAGE_DONE] [{}] finished (generated {} diffs)",
+                                            Utc::now().format("%H:%M:%S"),
+                                            agent_name,
+                                            diff_count
+                                        )));
+
                                         let _ = tx.send(UiEvent::StageUpdate {
                                             text: result.text,
                                             thinking: result.thinking,
                                         });
+
                                         for diff in result.proposed_diffs {
                                             let _ = tx.send(UiEvent::DiffProposed(diff));
                                         }
                                     }
                                     Err(e) => {
+                                        let _ = tx.send(UiEvent::DebugLog(format!(
+                                            "[{}] [STAGE_ERROR] [{}] error: {}",
+                                            Utc::now().format("%H:%M:%S"),
+                                            agent_name,
+                                            e
+                                        )));
+
                                         let _ = tx.send(UiEvent::StageUpdate {
                                             text: format!("Stage Execution Error: {}", e),
                                             thinking: None,
@@ -636,7 +804,7 @@ impl eframe::App for YggdrasilApp {
                 });
             });
 
-        // Bottom Panel: Embedded Terminal & Diagnostics Console (Fully Resizable & Extendable)
+        // Bottom Panel: Embedded Terminal & Diagnostics & Debug Run Logs
         egui::TopBottomPanel::bottom("bottom_terminal")
             .resizable(true)
             .min_height(75.0)
@@ -649,6 +817,10 @@ impl eframe::App for YggdrasilApp {
                     }
                     if ui.selectable_label(self.active_bottom_tab == 1, "🐞 Compiler Output").clicked() {
                         self.active_bottom_tab = 1;
+                    }
+                    let debug_label = format!("🛠️ Debug Logs ({})", self.debug_logs.len());
+                    if ui.selectable_label(self.active_bottom_tab == 2, debug_label).clicked() {
+                        self.active_bottom_tab = 2;
                     }
 
                     // Terminal extension presets
@@ -664,8 +836,14 @@ impl eframe::App for YggdrasilApp {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Clear").clicked() {
-                            self.terminal_logs.clear();
+                        if ui.button("Clear Logs").clicked() {
+                            if self.active_bottom_tab == 0 {
+                                self.terminal_logs.clear();
+                            } else if self.active_bottom_tab == 1 {
+                                self.compiler_logs.clear();
+                            } else {
+                                self.debug_logs.clear();
+                            }
                         }
                     });
                 });
@@ -673,6 +851,7 @@ impl eframe::App for YggdrasilApp {
 
                 let avail_y = ui.available_height();
                 let scroll_height = (avail_y - 36.0).max(40.0);
+
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .max_height(scroll_height)
@@ -682,12 +861,25 @@ impl eframe::App for YggdrasilApp {
                             for line in &self.terminal_logs {
                                 ui.monospace(line);
                             }
-                        } else {
+                        } else if self.active_bottom_tab == 1 {
                             if self.compiler_logs.is_empty() {
                                 ui.weak("No compiler diagnostics yet. Run 'cargo check' or ask Debugger Agent.");
                             } else {
                                 for line in &self.compiler_logs {
                                     ui.monospace(line);
+                                }
+                            }
+                        } else {
+                            // Debug logs view
+                            for log in &self.debug_logs {
+                                if log.contains("[ERROR]") || log.contains("[STAGE_ERROR]") {
+                                    ui.colored_label(egui::Color32::from_rgb(255, 120, 120), log);
+                                } else if log.contains("[DIFF]") || log.contains("[DIFF_DONE]") {
+                                    ui.colored_label(egui::Color32::from_rgb(120, 240, 140), log);
+                                } else if log.contains("[ROUTER]") || log.contains("[AI_REQUEST]") {
+                                    ui.colored_label(egui::Color32::from_rgb(140, 200, 255), log);
+                                } else {
+                                    ui.monospace(log);
                                 }
                             }
                         }
@@ -709,6 +901,12 @@ impl eframe::App for YggdrasilApp {
                         let root = self.project.try_lock().ok().and_then(|p| p.root_path.clone());
                         let tx = self.ui_sender.clone();
                         tokio::spawn(async move {
+                            let _ = tx.send(UiEvent::DebugLog(format!(
+                                "[{}] [PTY] Spawning: {}",
+                                Utc::now().format("%H:%M:%S"),
+                                cmd
+                            )));
+
                             match TerminalRunner::run_command(root, &cmd).await {
                                 Ok(out) => {
                                     if !out.stdout.is_empty() {
@@ -717,9 +915,20 @@ impl eframe::App for YggdrasilApp {
                                     if !out.stderr.is_empty() {
                                         let _ = tx.send(UiEvent::TerminalLog(format!("ERR: {}", out.stderr)));
                                     }
+                                    let _ = tx.send(UiEvent::DebugLog(format!(
+                                        "[{}] [PTY] Finished '{}' with exit code: {:?}",
+                                        Utc::now().format("%H:%M:%S"),
+                                        cmd,
+                                        out.exit_code
+                                    )));
                                 }
                                 Err(e) => {
                                     let _ = tx.send(UiEvent::TerminalLog(format!("Execution Error: {}", e)));
+                                    let _ = tx.send(UiEvent::DebugLog(format!(
+                                        "[{}] [PTY_ERROR] Command failed: {}",
+                                        Utc::now().format("%H:%M:%S"),
+                                        e
+                                    )));
                                 }
                             }
                         });
@@ -729,24 +938,26 @@ impl eframe::App for YggdrasilApp {
 
         // Center Panel: Code Editor & Media/Document Viewer
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Tabs Bar
+            // Tabs Bar (with zero ID clashes)
             if !self.open_tabs.is_empty() {
                 ui.horizontal(|ui| {
                     let mut tab_to_close = None;
                     for (i, tab) in self.open_tabs.iter().enumerate() {
-                        let title = if tab.is_dirty {
-                            format!("* {}", tab.name)
-                        } else {
-                            tab.name.clone()
-                        };
+                        ui.push_id(egui::Id::new("tab_header").with(i), |ui| {
+                            let title = if tab.is_dirty {
+                                format!("* {}", tab.name)
+                            } else {
+                                tab.name.clone()
+                            };
 
-                        ui.horizontal(|ui| {
-                            if ui.selectable_label(self.active_tab == i, title).clicked() {
-                                self.active_tab = i;
-                            }
-                            if ui.small_button("×").clicked() {
-                                tab_to_close = Some(i);
-                            }
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(self.active_tab == i, title).clicked() {
+                                    self.active_tab = i;
+                                }
+                                if ui.small_button("×").clicked() {
+                                    tab_to_close = Some(i);
+                                }
+                            });
                         });
                     }
 
@@ -773,15 +984,17 @@ impl eframe::App for YggdrasilApp {
                 match tab.kind {
                     FileKind::Text => {
                         let prev = tab.content.clone();
-                        egui::ScrollArea::both().show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut tab.content)
-                                    .font(egui::TextStyle::Monospace)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY)
-                                    .lock_focus(true),
-                            );
-                        });
+                        egui::ScrollArea::both()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut tab.content)
+                                        .font(egui::TextStyle::Monospace)
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY)
+                                        .lock_focus(true),
+                                );
+                            });
                         if tab.content != prev {
                             tab.is_dirty = true;
                         }
