@@ -1,3 +1,4 @@
+use leptos::ev;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -19,6 +20,9 @@ pub fn App() -> impl IntoView {
     let (active_model, set_active_model) = signal("nvidia/nemotron-3.5-lightning-30b-a3b".to_string());
     let (has_api_key, set_has_api_key) = signal(StorageService::has_api_key());
     let (show_key_modal, set_show_key_modal) = signal(false);
+    let (project_path_sig, set_project_path_sig) = signal(String::new());
+    let (show_sidebar, set_show_sidebar) = signal(true);
+    let (is_console_collapsed, set_is_console_collapsed) = signal(false);
 
     // Initial demo project tree
     let sample_tree = FileItem::new_dir(
@@ -552,14 +556,23 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
 
     // Run Command Callback from Terminal Tab
     let handle_run_command = Callback::new(move |cmd: String| {
-        set_terminal_logs.update(|logs| logs.push(format!("$ {}", cmd)));
+        let current_dir = root_item.get().path;
+        let is_native = TauriService::is_available();
 
-        if TauriService::is_available() {
+        if is_native {
             let cmd_clone = cmd.clone();
+            let cwd_arg = if current_dir.is_empty() || current_dir.starts_with('/') {
+                None
+            } else {
+                Some(current_dir.clone())
+            };
+            let prompt_dir = if current_dir.is_empty() { "~".to_string() } else { current_dir.clone() };
+            set_terminal_logs.update(|logs| logs.push(format!("PS {}> {}", prompt_dir, cmd)));
+
             spawn_local(async move {
                 match TauriService::invoke::<serde_json::Value>(
                     "run_terminal_command",
-                    &serde_json::json!({ "cmd": cmd_clone, "cwd": None::<String> }),
+                    &serde_json::json!({ "cmd": cmd_clone, "cwd": cwd_arg }),
                 )
                 .await
                 {
@@ -587,13 +600,19 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
             return;
         }
 
+        set_terminal_logs.update(|logs| {
+            logs.push(format!("[wasm-sandbox] $ {}", cmd));
+            logs.push("⚠️ [Web Browser Sandbox] Commands in web browser are simulated.".to_string());
+            logs.push("   To execute real system binaries (cargo, rustc, powershell, git), launch yggdrasil-desktop.exe!".to_string());
+        });
+
         let lower = cmd.trim().to_lowercase();
         if lower == "clear" {
             set_terminal_logs.set(vec![]);
         } else if lower == "help" {
             set_terminal_logs.update(|logs| {
-                logs.push("Available simulated commands:".into());
-                logs.push("  cargo check   - Run compiler diagnostics on workspace".into());
+                logs.push("Available in-browser commands:".into());
+                logs.push("  cargo check   - Run compiler diagnostics on simulated workspace".into());
                 logs.push("  cargo build   - Compile workspace with dev profile".into());
                 logs.push("  cargo test    - Run workspace unit & integration test suite".into());
                 logs.push("  cargo run     - Execute active workspace binary".into());
@@ -637,7 +656,7 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
             });
         } else {
             set_terminal_logs.update(|logs| {
-                logs.push(format!("Command executed: {}", cmd));
+                logs.push(format!("Command simulated: {}", cmd));
             });
         }
     });
@@ -666,6 +685,7 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
                         let name = folder_item.name.clone();
                         let path = folder_item.path.clone();
                         set_project_name.set(name);
+                        set_project_path_sig.set(path.clone());
                         set_root_item.set(folder_item.clone());
 
                         fn find_first_file(item: &FileItem) -> Option<FileItem> {
@@ -741,6 +761,60 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
         }
     });
 
+    // Global Keyboard Shortcuts
+    let on_open_folder_clone = on_open_folder;
+    let handle_accept_diff_clone = handle_accept_diff;
+    let _ = window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
+        let key = ev.key();
+        let ctrl_or_meta = ev.ctrl_key() || ev.meta_key();
+
+        if ctrl_or_meta && (key == "o" || key == "O") {
+            ev.prevent_default();
+            on_open_folder_clone.run(());
+        } else if ctrl_or_meta && (key == "s" || key == "S") {
+            ev.prevent_default();
+            let pending = messages.get().iter().find_map(|m| {
+                if let Some(ref d) = m.diff {
+                    if d.status == DiffStatus::Pending {
+                        return Some(d.clone());
+                    }
+                }
+                None
+            });
+
+            if let Some(d) = pending {
+                handle_accept_diff_clone.run(d);
+            } else {
+                let tabs = open_tabs.get();
+                let idx = active_tab_idx.get();
+                if let Some(tab) = tabs.get(idx) {
+                    let path = tab.path.clone();
+                    let content = tab.content.clone();
+                    if TauriService::is_available() {
+                        let p = path.clone();
+                        let c = content.clone();
+                        spawn_local(async move {
+                            let _ = TauriService::invoke::<()>(
+                                "write_file_content",
+                                &serde_json::json!({ "path": p, "content": c }),
+                            )
+                            .await;
+                        });
+                    }
+                    set_terminal_logs.update(|l| l.push(format!("💾 [File Saved] {}", path)));
+                }
+            }
+        } else if ctrl_or_meta && (key == "`" || key == "j" || key == "J") {
+            ev.prevent_default();
+            set_is_console_collapsed.update(|c| *c = !*c);
+        } else if ctrl_or_meta && (key == "b" || key == "B") {
+            ev.prevent_default();
+            set_show_sidebar.update(|s| *s = !*s);
+        } else if key == "Escape" {
+            set_show_key_modal.set(false);
+        }
+    });
+
     view! {
         <div class="flex flex-col h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100 font-sans">
             // Top Navigation Bar
@@ -757,12 +831,20 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
 
             // Center Work Area (Tree + Editor + Agent Deck)
             <div class="flex-1 flex min-h-0 overflow-hidden">
-                // File Explorer
-                <FileTree
-                    root_item=root_item
-                    on_select_file=handle_select_file
-                    on_toggle_folder=on_toggle_folder
-                />
+                // File Explorer (toggleable with Ctrl+B)
+                {move || {
+                    if show_sidebar.get() {
+                        view! {
+                            <FileTree
+                                root_item=root_item
+                                on_select_file=handle_select_file
+                                on_toggle_folder=on_toggle_folder
+                            />
+                        }.into_any()
+                    } else {
+                        view! { <span class="hidden" /> }.into_any()
+                    }
+                }}
 
                 // Code & Media Editor
                 <CodeEditor
@@ -794,6 +876,9 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
                 debug_logs=debug_logs
                 on_run_command=handle_run_command
                 on_clear_logs=handle_clear_logs
+                project_path=project_path_sig
+                is_collapsed=is_console_collapsed
+                set_is_collapsed=set_is_console_collapsed
             />
 
             // API Key Modal Dialog

@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use crate::models::file::FileItem;
+use crate::services::TauriService;
 
 #[component]
 pub fn FileTree(
@@ -12,7 +13,15 @@ pub fn FileTree(
             // Explorer Header
             <div class="h-9 px-3 border-b border-zinc-800 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-zinc-400">
                 <span>"Explorer"</span>
-                <span class="text-[10px] bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded text-zinc-400">"WASM FS"</span>
+                <span class=move || {
+                    if TauriService::is_available() {
+                        "text-[10px] bg-emerald-950/60 border border-emerald-700/60 px-1.5 py-0.5 rounded text-emerald-400 font-bold"
+                    } else {
+                        "text-[10px] bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded text-zinc-400"
+                    }
+                }>
+                    {move || if TauriService::is_available() { "NATIVE FS" } else { "WASM FS" }}
+                </span>
             </div>
 
             // Tree Scrollable Area
