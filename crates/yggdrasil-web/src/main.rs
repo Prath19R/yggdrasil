@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use yggdrasil::app::App;
+use yggdrasil_web::app::App;
 
 fn main() {
     _ = console_error_panic_hook::set_once();

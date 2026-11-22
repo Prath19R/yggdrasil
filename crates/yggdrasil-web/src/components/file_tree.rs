@@ -17,13 +17,14 @@ pub fn FileTree(
 
             // Tree Scrollable Area
             <div class="flex-1 overflow-y-auto overflow-x-hidden p-2 space-y-0.5 font-mono text-xs">
-                {
+                {move || {
                     let select = on_select_file;
                     let toggle = on_toggle_folder;
+                    let root = root_item.get();
                     view! {
-                        <FileNodeView item=root_item.get() on_select=select on_toggle=toggle />
+                        <FileNodeView item=root on_select=select on_toggle=toggle />
                     }
-                }
+                }}
             </div>
         </aside>
     }

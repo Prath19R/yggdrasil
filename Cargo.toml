@@ -8,6 +8,8 @@ members = [
     "crates/yggdrasil-terminal",
     "crates/yggdrasil-orchestrator",
     "crates/yggdrasil-gui",
+    "crates/yggdrasil-web",
+    "src-tauri",
 ]
 default-members = ["crates/yggdrasil-gui"]
 

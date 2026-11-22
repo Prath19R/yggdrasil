@@ -47,7 +47,24 @@
       }
     </style>
     <link data-trunk rel="rust" href="Cargo.toml" data-wasm-opt="z" />
+    <script>
+      window.yggdrasilInvoke = async function(cmd, argsJson) {
+        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+          try {
+            const args = argsJson ? JSON.parse(argsJson) : {};
+            const res = await window.__TAURI__.core.invoke(cmd, args);
+            return JSON.stringify(res);
+          } catch (err) {
+            throw new Error(typeof err === "string" ? err : JSON.stringify(err));
+          }
+        }
+        throw new Error("TAURI_NOT_PRESENT");
+      };
+      window.isTauriApp = function() {
+        return !!(window.__TAURI__ && window.__TAURI__.core);
+      };
+    </script>
   </head>
-  <body class="bg-[#09090b] text-zinc-100 h-full overflow-hidden select-none font-sans">
+  <body class="bg-[#09090b] text-zinc-100 h-full overflow-hidden font-sans">
   </body>
 </html>

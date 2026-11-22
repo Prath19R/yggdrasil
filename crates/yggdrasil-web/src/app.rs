@@ -8,7 +8,7 @@ use crate::models::agent::AgentRole;
 use crate::models::chat::ChatMessage;
 use crate::models::diff::{DiffStatus, FileDiff};
 use crate::models::file::{FileItem, FileKind};
-use crate::services::{InferenceService, OrchestratorService, StorageService};
+use crate::services::{InferenceService, OrchestratorService, StorageService, TauriService};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -287,6 +287,18 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
         set_terminal_logs.update(|logs| {
             logs.push(format!("✔ [Safety Guard] Diff applied to: {}", file_path));
         });
+
+        if TauriService::is_available() {
+            let p = file_path.clone();
+            let c = new_content.clone();
+            spawn_local(async move {
+                let _ = TauriService::invoke::<()>(
+                    "write_file_content",
+                    &serde_json::json!({ "path": p, "content": c }),
+                )
+                .await;
+            });
+        }
         set_compiler_logs.update(|logs| {
             logs.push(format!("$ cargo check --target wasm32-unknown-unknown"));
             logs.push(format!("    Checking yggdrasil-workspace v0.1.0"));
@@ -364,15 +376,39 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
                 ));
             });
 
-            match InferenceService::query_llm(
-                &selected_mode,
-                &selected_model,
-                &api_key,
-                &system_prompt,
-                &prompt_text,
-            )
-            .await
-            {
+            let tauri_active = TauriService::is_available();
+            let query_res = if tauri_active {
+                match TauriService::invoke::<serde_json::Value>(
+                    "query_llm",
+                    &serde_json::json!({
+                        "mode": selected_mode,
+                        "model": selected_model,
+                        "apiKey": api_key,
+                        "systemPrompt": system_prompt,
+                        "userPrompt": prompt_text
+                    }),
+                )
+                .await
+                {
+                    Ok(val) => {
+                        let content = val["content"].as_str().unwrap_or("").to_string();
+                        let thinking = val["thinking"].as_str().map(|s| s.to_string());
+                        Ok((content, thinking))
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                InferenceService::query_llm(
+                    &selected_mode,
+                    &selected_model,
+                    &api_key,
+                    &system_prompt,
+                    &prompt_text,
+                )
+                .await
+            };
+
+            match query_res {
                 Ok((content, thinking)) => {
                     let mut diffs = OrchestratorService::extract_diffs(&content, &agent_name);
 
@@ -438,6 +474,39 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
     // Run Command Callback from Terminal Tab
     let handle_run_command = Callback::new(move |cmd: String| {
         set_terminal_logs.update(|logs| logs.push(format!("$ {}", cmd)));
+
+        if TauriService::is_available() {
+            let cmd_clone = cmd.clone();
+            spawn_local(async move {
+                match TauriService::invoke::<serde_json::Value>(
+                    "run_terminal_command",
+                    &serde_json::json!({ "cmd": cmd_clone, "cwd": None::<String> }),
+                )
+                .await
+                {
+                    Ok(res) => {
+                        let stdout = res["stdout"].as_str().unwrap_or("");
+                        let stderr = res["stderr"].as_str().unwrap_or("");
+                        let exit_code = res["exit_code"].as_i64().unwrap_or(0);
+                        for line in stdout.lines() {
+                            set_terminal_logs.update(|l| l.push(line.to_string()));
+                        }
+                        for line in stderr.lines() {
+                            set_compiler_logs.update(|l| l.push(line.to_string()));
+                        }
+                        if exit_code != 0 {
+                            set_terminal_logs.update(|l| {
+                                l.push(format!("Process finished with exit code: {}", exit_code))
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        set_terminal_logs.update(|l| l.push(format!("Terminal error: {}", e)));
+                    }
+                }
+            });
+            return;
+        }
 
         let lower = cmd.trim().to_lowercase();
         if lower == "clear" {
@@ -506,10 +575,57 @@ Universal cross-platform WebAssembly IDE powered by **Rust**, **Leptos 0.7**, an
     });
 
     let on_open_folder = Callback::new(move |_| {
-        set_project_name.set("yggdrasil-workspace".to_string());
-        set_terminal_logs.update(|logs| {
-            logs.push("Workspace reloaded: /yggdrasil-workspace".to_string());
-        });
+        if TauriService::is_available() {
+            spawn_local(async move {
+                match TauriService::invoke::<Option<FileItem>>(
+                    "open_folder_dialog",
+                    &serde_json::json!({}),
+                )
+                .await
+                {
+                    Ok(Some(folder_item)) => {
+                        let name = folder_item.name.clone();
+                        let path = folder_item.path.clone();
+                        set_project_name.set(name);
+                        set_root_item.set(folder_item.clone());
+
+                        fn find_first_file(item: &FileItem) -> Option<FileItem> {
+                            if !item.is_dir {
+                                return Some(item.clone());
+                            }
+                            for c in &item.children {
+                                if let Some(f) = find_first_file(c) {
+                                    return Some(f);
+                                }
+                            }
+                            None
+                        }
+                        if let Some(first_file) = find_first_file(&folder_item) {
+                            set_open_tabs.set(vec![first_file]);
+                            set_active_tab_idx.set(0);
+                        }
+
+                        set_terminal_logs.update(|logs| {
+                            logs.push(format!("Workspace loaded: {}", path));
+                        });
+                        set_debug_logs.update(|logs| {
+                            logs.push(format!("[INFO] Native directory opened: {}", path));
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        set_debug_logs.update(|logs| {
+                            logs.push(format!("[ERROR] Folder dialog error: {}", err));
+                        });
+                    }
+                }
+            });
+        } else {
+            set_project_name.set("yggdrasil-workspace".to_string());
+            set_terminal_logs.update(|logs| {
+                logs.push("Workspace reloaded: /yggdrasil-workspace".to_string());
+            });
+        }
     });
 
     view! {
