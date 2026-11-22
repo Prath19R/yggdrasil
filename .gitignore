@@ -3,6 +3,7 @@ dist/
 Cargo.lock
 **/*.rs.bk
 *.pdb
+*.exe
 .env
 .env*
 *.env

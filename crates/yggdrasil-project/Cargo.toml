@@ -1,0 +1,12 @@
+[package]
+name = "yggdrasil-project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ignore.workspace = true
+rfd.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+yggdrasil-core.workspace = true
