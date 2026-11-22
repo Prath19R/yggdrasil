@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en" class="dark scroll-smooth h-full">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🌳 Yggdrasil — Pure Rust AI IDE</title>
+    <meta name="description" content="Next-Generation Pure Rust AI-Powered IDE with autonomous multi-agent swarm." />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌳</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['"JetBrains Mono"', 'monospace'],
+            },
+            colors: {
+              zinc: {
+                850: '#1f1f23',
+                950: '#0c0c0e',
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      /* Custom dark scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #09090b;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #27272a;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #3f3f46;
+      }
+    </style>
+    <link data-trunk rel="rust" href="Cargo.toml" data-wasm-opt="z" />
+  </head>
+  <body class="bg-[#09090b] text-zinc-100 h-full overflow-hidden select-none font-sans">
+  </body>
+</html>
