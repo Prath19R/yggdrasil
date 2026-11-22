@@ -153,15 +153,26 @@ impl OrchestratorEngine {
 
         match ai_result {
             Ok(resp) => {
-                let full_text = if compiler_diag.is_empty() {
-                    format!("⚡ [{}]\n{}", role.name(), resp.text)
+                let body_text = if resp.text.trim().is_empty() {
+                    resp.thinking.clone().unwrap_or_else(|| "Completed with no output.".to_string())
                 } else {
-                    format!("⚡ [{}]\n{}\n\n{}", role.name(), compiler_diag, resp.text)
+                    resp.text.clone()
+                };
+
+                let full_text = if compiler_diag.is_empty() {
+                    format!("⚡ [{}]\n{}", role.name(), body_text)
+                } else {
+                    format!("⚡ [{}]\n{}\n\n{}", role.name(), compiler_diag, body_text)
                 };
 
                 let mut diffs = Vec::new();
                 if let Some(root) = &root_path {
                     diffs = Self::extract_code_diffs(root, &resp.text, role.name());
+                    if diffs.is_empty() {
+                        if let Some(thought) = &resp.thinking {
+                            diffs = Self::extract_code_diffs(root, thought, role.name());
+                        }
+                    }
                 }
 
                 Ok(StageResult {

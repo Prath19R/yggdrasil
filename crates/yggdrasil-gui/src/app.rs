@@ -118,6 +118,7 @@ pub struct YggdrasilApp {
     pub current_mode: InferenceMode,
     pub current_model: String,
     pub show_thinking: bool,
+    pub auto_apply_diffs: bool,
 
     // API Key Dialog
     pub show_api_key_modal: bool,
@@ -153,6 +154,7 @@ impl YggdrasilApp {
             current_mode: InferenceMode::CloudApi,
             current_model: "nvidia/nemotron-3.5-lightning-30b-a3b".to_string(),
             show_thinking: true,
+            auto_apply_diffs: true,
             show_api_key_modal: false,
             api_key_input: key_input,
         };
@@ -292,11 +294,20 @@ impl eframe::App for YggdrasilApp {
                         timestamp: Utc::now().format("%H:%M:%S").to_string(),
                     });
                 }
-                UiEvent::DiffProposed(diff) => {
+                UiEvent::DiffProposed(mut diff) => {
+                    let path = diff.path.clone();
+                    if self.auto_apply_diffs {
+                        let _ = diff.accept();
+                        self.open_file(path.clone());
+                    }
                     self.chat_history.push(ChatMessage {
                         sender: diff.agent_role.clone(),
                         is_user: false,
-                        text: format!("Proposed changes for `{}`:\n{}", diff.path.display(), diff.summary),
+                        text: if self.auto_apply_diffs {
+                            format!("⚡ Applied code changes to `{}`\n{}", path.display(), diff.summary)
+                        } else {
+                            format!("Proposed changes for `{}`:\n{}", path.display(), diff.summary)
+                        },
                         thinking: None,
                         diff: Some(diff),
                         timestamp: Utc::now().format("%H:%M:%S").to_string(),
@@ -481,7 +492,8 @@ impl eframe::App for YggdrasilApp {
                 ui.horizontal(|ui| {
                     ui.heading("💬 Agent Deck");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.checkbox(&mut self.show_thinking, "Show <think>");
+                        ui.checkbox(&mut self.show_thinking, "Thinking");
+                        ui.checkbox(&mut self.auto_apply_diffs, "⚡ Auto-apply");
                     });
                 });
                 ui.separator();
@@ -497,6 +509,7 @@ impl eframe::App for YggdrasilApp {
 
                 // Chat Message Scroll View
                 let chat_height = ui.available_height() - 90.0;
+                let mut file_to_open_after = None;
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .max_height(chat_height)
@@ -536,6 +549,7 @@ impl eframe::App for YggdrasilApp {
                                         ui.horizontal(|ui| {
                                             if ui.button("✔ Accept Diff").clicked() {
                                                 let _ = diff.accept();
+                                                file_to_open_after = Some(diff.path.clone());
                                             }
                                             if ui.button("✖ Reject").clicked() {
                                                 diff.reject();
@@ -549,6 +563,10 @@ impl eframe::App for YggdrasilApp {
                             ui.add_space(4.0);
                         }
                     });
+
+                if let Some(path) = file_to_open_after {
+                    self.open_file(path);
+                }
 
                 ui.separator();
 
