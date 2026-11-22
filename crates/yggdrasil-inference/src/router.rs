@@ -36,6 +36,19 @@ impl InferenceRouter {
         }
     }
 
+    pub fn set_api_key(&mut self, key: String) {
+        let trimmed = key.trim().to_string();
+        if !trimmed.is_empty() {
+            self.cloud_provider = Some(Arc::new(NvidiaNimProvider::new(trimmed)));
+        } else {
+            self.cloud_provider = None;
+        }
+    }
+
+    pub fn has_api_key(&self) -> bool {
+        self.cloud_provider.is_some()
+    }
+
     pub fn set_mode(&mut self, mode: InferenceMode) {
         self.mode = mode;
         if self.mode == InferenceMode::CloudApi {

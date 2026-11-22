@@ -12,6 +12,10 @@ pub struct FileNode {
 
 impl FileNode {
     pub fn from_root<P: AsRef<Path>>(root: P) -> Self {
+        Self::build_recursive(root, 8)
+    }
+
+    pub fn build_recursive<P: AsRef<Path>>(root: P, max_depth: usize) -> Self {
         let root = root.as_ref();
         let name = root
             .file_name()
@@ -25,18 +29,17 @@ impl FileNode {
             children: Vec::new(),
         };
 
-        // Populate direct children first for high-performance lazy expansion
-        Self::populate_children(&mut root_node);
+        Self::populate_recursive(&mut root_node, 1, max_depth);
         root_node
     }
 
-    pub fn populate_children(&mut self) {
-        if !self.is_dir {
+    fn populate_recursive(node: &mut FileNode, current_depth: usize, max_depth: usize) {
+        if !node.is_dir || current_depth > max_depth {
             return;
         }
 
         let mut children = Vec::new();
-        let walker = WalkBuilder::new(&self.path)
+        let walker = WalkBuilder::new(&node.path)
             .max_depth(Some(1))
             .git_ignore(true)
             .hidden(true)
@@ -44,7 +47,7 @@ impl FileNode {
 
         for result in walker.flatten() {
             let path = result.into_path();
-            if path == self.path {
+            if path == node.path {
                 continue;
             }
 
@@ -54,12 +57,23 @@ impl FileNode {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            children.push(FileNode {
+            // Skip heavy build/cache folders even if no .gitignore present
+            if is_dir && (name == "target" || name == "node_modules" || name == ".git" || name == ".next") {
+                continue;
+            }
+
+            let mut child = FileNode {
                 name,
                 path,
                 is_dir,
                 children: Vec::new(),
-            });
+            };
+
+            if is_dir && current_depth < max_depth {
+                Self::populate_recursive(&mut child, current_depth + 1, max_depth);
+            }
+
+            children.push(child);
         }
 
         // Sort: directories first, then alphabetical
@@ -73,6 +87,6 @@ impl FileNode {
             }
         });
 
-        self.children = children;
+        node.children = children;
     }
 }
