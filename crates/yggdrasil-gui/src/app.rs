@@ -43,7 +43,7 @@ pub struct EditorTab {
 
 #[allow(dead_code)]
 pub enum UiEvent {
-    StageUpdate(String),
+    StageUpdate { text: String, thinking: Option<String> },
     DiffProposed(FileDiff),
     TerminalLog(String),
     ChatReply { sender: String, text: String, thinking: Option<String> },
@@ -282,12 +282,12 @@ impl eframe::App for YggdrasilApp {
         // Poll incoming async UI events
         while let Ok(event) = self.ui_receiver.try_recv() {
             match event {
-                UiEvent::StageUpdate(log) => {
+                UiEvent::StageUpdate { text, thinking } => {
                     self.chat_history.push(ChatMessage {
                         sender: "👑 Master Orchestrator".into(),
                         is_user: false,
-                        text: log,
-                        thinking: None,
+                        text,
+                        thinking,
                         diff: None,
                         timestamp: Utc::now().format("%H:%M:%S").to_string(),
                     });
@@ -450,9 +450,11 @@ impl eframe::App for YggdrasilApp {
                 let root_node = self.project.try_lock().ok().and_then(|p| p.root_node.clone());
                 if let Some(node) = root_node {
                     let mut file_to_open = None;
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        Self::render_file_tree(ui, &node, &mut file_to_open);
-                    });
+                    egui::ScrollArea::both()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            Self::render_file_tree(ui, &node, &mut file_to_open);
+                        });
                     if let Some(path) = file_to_open {
                         self.open_file(path);
                     }
@@ -496,6 +498,7 @@ impl eframe::App for YggdrasilApp {
                 // Chat Message Scroll View
                 let chat_height = ui.available_height() - 90.0;
                 egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
                     .max_height(chat_height)
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
@@ -586,14 +589,25 @@ impl eframe::App for YggdrasilApp {
                                 .collect::<Vec<_>>()
                                 .join("\n");
 
-                            let _ = tx.send(UiEvent::StageUpdate(format!(
-                                "Formulated Execution Plan:\n{}",
-                                stages_summary
-                            )));
+                            let _ = tx.send(UiEvent::StageUpdate {
+                                text: format!("Formulated Execution Plan:\n{}", stages_summary),
+                                thinking: None,
+                            });
 
                             for i in 0..plan.stages.len() {
-                                if let Ok(result) = orch.execute_stage(i, &mut plan).await {
-                                    let _ = tx.send(UiEvent::StageUpdate(result));
+                                match orch.execute_stage(i, &mut plan).await {
+                                    Ok(result) => {
+                                        let _ = tx.send(UiEvent::StageUpdate {
+                                            text: result.text,
+                                            thinking: result.thinking,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(UiEvent::StageUpdate {
+                                            text: format!("Stage Execution Error: {}", e),
+                                            thinking: None,
+                                        });
+                                    }
                                 }
                             }
                         });
@@ -636,9 +650,11 @@ impl eframe::App for YggdrasilApp {
                 });
                 ui.separator();
 
-                let scroll_height = ui.available_height() - 36.0;
-                egui::ScrollArea::vertical()
-                    .max_height(scroll_height.max(40.0))
+                let avail_y = ui.available_height();
+                let scroll_height = (avail_y - 36.0).max(40.0);
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .max_height(scroll_height)
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         if self.active_bottom_tab == 0 {

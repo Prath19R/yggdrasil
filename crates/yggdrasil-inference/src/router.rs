@@ -4,6 +4,14 @@ use crate::provider::{InferenceProvider, StreamResult};
 use crate::types::{InferenceMode, ModelMetadata, UnifiedChatRequest};
 use std::sync::Arc;
 
+use futures::StreamExt;
+
+#[derive(Debug, Clone, Default)]
+pub struct ChatResponse {
+    pub text: String,
+    pub thinking: Option<String>,
+}
+
 pub struct InferenceRouter {
     pub mode: InferenceMode,
     pub active_model: String,
@@ -91,5 +99,35 @@ impl InferenceRouter {
             }
             InferenceMode::Local => self.local_provider.stream_chat(req).await,
         }
+    }
+
+    pub async fn chat(&self, req: UnifiedChatRequest) -> Result<ChatResponse, String> {
+        let mut stream = self.stream_chat(req).await?;
+        let mut text = String::new();
+        let mut thinking = String::new();
+
+        while let Some(chunk_res) = stream.next().await {
+            match chunk_res {
+                Ok(chunk) => {
+                    if chunk.is_thinking {
+                        thinking.push_str(&chunk.text_delta);
+                    } else {
+                        text.push_str(&chunk.text_delta);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        let thinking_opt = if thinking.trim().is_empty() {
+            None
+        } else {
+            Some(thinking)
+        };
+
+        Ok(ChatResponse {
+            text,
+            thinking: thinking_opt,
+        })
     }
 }

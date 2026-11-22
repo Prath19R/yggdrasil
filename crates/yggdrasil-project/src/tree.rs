@@ -11,8 +11,9 @@ pub struct FileNode {
 }
 
 impl FileNode {
+    /// Builds the entire tree recursively until none left (unbounded depth)
     pub fn from_root<P: AsRef<Path>>(root: P) -> Self {
-        Self::build_recursive(root, 8)
+        Self::build_recursive(root, usize::MAX)
     }
 
     pub fn build_recursive<P: AsRef<Path>>(root: P, max_depth: usize) -> Self {
@@ -57,9 +58,13 @@ impl FileNode {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            // Skip heavy build/cache folders even if no .gitignore present
-            if is_dir && (name == "target" || name == "node_modules" || name == ".git" || name == ".next") {
-                continue;
+            // Skip heavy build/cache/venv folders to protect memory and avoid infinite loops
+            if is_dir {
+                match name.as_str() {
+                    "target" | "node_modules" | ".git" | ".next" | "dist" | "build"
+                    | ".cache" | "__pycache__" | ".venv" | "venv" | "obj" | "bin" => continue,
+                    _ => {}
+                }
             }
 
             let mut child = FileNode {
@@ -69,6 +74,7 @@ impl FileNode {
                 children: Vec::new(),
             };
 
+            // Recursively populate until no subdirectories remain
             if is_dir && current_depth < max_depth {
                 Self::populate_recursive(&mut child, current_depth + 1, max_depth);
             }

@@ -8,4 +8,4 @@ pub use types::*;
 pub use provider::InferenceProvider;
 pub use nvidia::NvidiaNimProvider;
 pub use ollama::OllamaProvider;
-pub use router::InferenceRouter;
+pub use router::{ChatResponse, InferenceRouter};
